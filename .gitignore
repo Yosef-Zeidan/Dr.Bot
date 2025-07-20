@@ -7,3 +7,9 @@ __pycache__/
 
 # Ignore local vector database
 chroma_db/
+
+.venv
+venv/
+.vscode/
+.idea/
+.DS_Store
