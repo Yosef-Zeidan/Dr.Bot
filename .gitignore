@@ -1,0 +1,15 @@
+# Ignore Python cache files
+__pycache__/
+*.pyc
+
+# Ignore local environment file
+.env
+
+# Ignore local vector database
+chroma_db/
+
+.venv
+venv/
+.vscode/
+.idea/
+.DS_Store
