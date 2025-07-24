@@ -1,75 +1,104 @@
-# ingest_data.py (New Mechanism)
+# ingest_data.py (Definitive Version - Corrected and Enhanced)
 
 import os
 import sys
-import psycopg2
+import firebase_admin
 import google.generativeai as genai
+from firebase_admin import credentials, firestore
 from dotenv import load_dotenv
 
 def ingest_data():
     """
-    Connects to Supabase, reads rows without embeddings, generates embeddings
-    for them using the Google AI API, and updates the rows in the database.
+    Connects to Firestore, finds all documents in the 'qa_pairs' collection,
+    checks if they have an embedding, generates one if missing, and updates the document.
+    This is the most reliable method.
     """
-    # --- 1. Load Environment and Configure API ---
-    load_dotenv()
-    google_api_key = os.getenv("GOOGLE_API_KEY")
-    if not google_api_key:
-        print("ERROR: GOOGLE_API_KEY not found in .env file.")
-        sys.exit(1)
-    genai.configure(api_key=google_api_key)
-    
-    db_host = os.getenv("DB_HOST")
-    db_name = os.getenv("DB_NAME")
-    db_user = os.getenv("DB_USER")
-    db_pass = os.getenv("DB_PASS")
+    # --- 1. Initialize Firebase & Google AI (with safety check) ---
     try:
-        db_port = int(os.getenv("DB_PORT", "5432"))
-    except (ValueError, TypeError):
-        print("ERROR: DB_PORT in .env is not a valid number.")
-        sys.exit(1)
+        load_dotenv()
+        
+        # Check if the app is already initialized to prevent errors
+        if not firebase_admin._apps:
+            cred = credentials.Certificate("firebase-key.json")
+            firebase_admin.initialize_app(cred)
+            print("Firebase app initialized.")
+        
+        db = firestore.client()
 
-    # --- 2. Fetch Rows That Need an Embedding ---
-    print("Connecting to Supabase to find data to index...")
-    try:
-        conn = psycopg2.connect(
-            host=db_host, port=db_port, dbname=db_name, user=db_user, password=db_pass
-        )
-        cursor = conn.cursor()
-        # Only get rows where the embedding is not yet created
-        cursor.execute("SELECT id, question_pattern, answer FROM qa_pairs WHERE embedding IS NULL")
-        rows_to_update = cursor.fetchall()
-        print(f"-> Found {len(rows_to_update)} new/updated rows to process.")
+        google_api_key = os.getenv("GOOGLE_API_KEY")
+        if not google_api_key:
+            raise ValueError("GOOGLE_API_KEY not found in .env file.")
+        genai.configure(api_key=google_api_key)
+        print("Successfully connected to Firebase and configured Google AI.")
     except Exception as e:
-        print(f"ERROR: Could not connect to or fetch from Supabase. Details: {e}")
+        print(f"FATAL: Initialization failed. Details: {e}")
         sys.exit(1)
 
-    if not rows_to_update:
-        print("No new data to ingest. Knowledge base is up to date.")
+    # --- 2. Fetch ALL Documents and Identify Those to Process ---
+    try:
+        print("Fetching all documents from 'qa_pairs' collection to check their status...")
+        qa_ref = db.collection('qa_pairs')
+        all_docs = qa_ref.stream()
+        
+        docs_to_process = []
+        total_docs = 0
+        for doc in all_docs:
+            total_docs += 1
+            data = doc.to_dict()
+            # This is the corrected logic: check if the 'embedding' key is missing.
+            if 'embedding' not in data:
+                docs_to_process.append(doc)
+        
+        print(f"-> Found {total_docs} total documents.")
+        print(f"-> Found {len(docs_to_process)} documents that need an embedding created.")
+
+    except Exception as e:
+        print(f"FATAL: Could not fetch documents from Firestore. Details: {e}")
+        sys.exit(1)
+
+    if not docs_to_process:
+        print("Knowledge base is already up to date. No new embeddings needed.")
         return
 
-    # --- 3. Generate Embeddings and Update Database ---
-    embedding_model = "models/embedding-001"
+    # --- 3. Generate Embeddings and Update Firestore ---
+    embedding_model = "models/embedding-001" 
     
-    for row in rows_to_update:
-        row_id, question, answer = row
-        # Combine question and answer for a richer embedding
+    # We use a batch to update Firestore, which is more efficient.
+    batch = db.batch()
+    
+    for doc in docs_to_process:
+        doc_id = doc.id
+        data = doc.to_dict()
+        # Ensure that question_pattern and answer exist before creating the text
+        question = data.get('question_pattern', '')
+        answer = data.get('answer', '')
         text_to_embed = f"Question: {question}\nAnswer: {answer}"
         
-        print(f"Generating embedding for row ID: {row_id}...")
+        if not text_to_embed.strip():
+            print(f"WARNING: Skipping document {doc_id} because it has no text content.")
+            continue
+            
+        print(f"Generating embedding for document ID: {doc_id}...")
         try:
-            embedding = genai.embed_content(model=embedding_model, content=text_to_embed)
-            # Update the specific row with its new embedding
-            cursor.execute("UPDATE qa_pairs SET embedding = %s WHERE id = %s", (embedding['embedding'], row_id))
+            embedding_result = genai.embed_content(model=embedding_model, content=text_to_embed)
+            
+            # Get a reference to the document and add the update to the batch
+            doc_ref = qa_ref.document(doc_id)
+            batch.update(doc_ref, {'embedding': embedding_result['embedding']})
+            
         except Exception as e:
-            print(f"ERROR: Could not generate or save embedding for row {row_id}. Details: {e}")
-            continue # Move to the next row
+            print(f"ERROR: Could not process document {doc_id}. The API call might have failed. Details: {e}")
+            continue
 
-    # --- 4. Commit Changes and Close ---
-    conn.commit()
-    cursor.close()
-    conn.close()
-    print("\n--- Knowledge ingestion complete! All new data is now searchable. ---")
+    # --- 4. Commit all the updates at once ---
+    try:
+        print("\nCommitting all updates to Firestore...")
+        batch.commit()
+        print("-> Batch commit successful!")
+    except Exception as e:
+        print(f"FATAL: Failed to commit updates to Firestore. Details: {e}")
+
+    print("\n--- Knowledge ingestion complete! ---")
 
 if __name__ == '__main__':
     ingest_data()
