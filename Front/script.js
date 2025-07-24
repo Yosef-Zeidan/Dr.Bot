@@ -1,15 +1,15 @@
-document.addEventListener('DOMContentLoaded', () => {
+// script.js (Final Version - Connected to Live Backend)
 
-    // Check which page is currently loaded
+document.addEventListener('DOMContentLoaded', () => {
+    // Check which page is currently loaded and run the appropriate logic
     if (document.querySelector('.auth-container')) {
         handleLoginPage();
     } else if (document.querySelector('.chat-container')) {
         handleChatPage();
     }
-
 });
 
-// --- LOGIN PAGE LOGIC ---
+// --- LOGIN PAGE LOGIC (No changes needed here) ---
 function handleLoginPage() {
     const loginForm = document.getElementById('login-form');
     const loginError = document.getElementById('login-error');
@@ -19,14 +19,10 @@ function handleLoginPage() {
         const username = document.getElementById('username').value;
         const password = document.getElementById('password').value;
 
-        // --- IMPORTANT ---
-        // This is a mock login. In a real application, you would send these
-        // credentials to your backend for verification.
+        // This is a simple mock login for demonstration purposes.
         if (username && password) {
             console.log('Login successful');
-            // Store a "session" token to indicate the user is logged in
             sessionStorage.setItem('isLoggedIn', 'true');
-            // Redirect to the chat page
             window.location.href = 'chat.html';
         } else {
             loginError.textContent = 'Please enter both username and password.';
@@ -34,7 +30,8 @@ function handleLoginPage() {
     });
 }
 
-// --- CHAT PAGE LOGIC ---
+
+// --- CHAT PAGE LOGIC (All new logic is here) ---
 function handleChatPage() {
     // Redirect to login if not authenticated
     if (sessionStorage.getItem('isLoggedIn') !== 'true') {
@@ -42,77 +39,99 @@ function handleChatPage() {
         return; // Stop further execution
     }
 
-    const chatWindow = document.getElementById('chat-window');
-    const userInput = document.getElementById('user-input');
     const sendBtn = document.getElementById('send-btn');
+    const userInputElement = document.getElementById('user-input');
     const logoutBtn = document.getElementById('logout-btn');
 
-    // --- BOT'S PRE-DEFINED QUESTIONS AND LOGIC ---
-    const questions = [
-        "Hello! I'm here to help you. What is your primary goal today? (e.g., 'Learn about pricing', 'Troubleshoot an issue')",
-        "Thank you. Could you please provide more details about your request?",
-        "Is there anything else I can assist you with?"
-    ];
-
-    let currentQuestionIndex = 0;
-    let userResponses = {};
-
-    function displayMessage(text, sender) {
-        const messageElement = document.createElement('div');
-        messageElement.classList.add('message', sender);
-        messageElement.textContent = text;
-        chatWindow.appendChild(messageElement);
-        // Scroll to the latest message
-        chatWindow.scrollTop = chatWindow.scrollHeight;
-    }
-
-    function askNextQuestion() {
-        if (currentQuestionIndex < questions.length) {
-            displayMessage(questions[currentQuestionIndex], 'bot');
-        } else {
-            // End of pre-defined questions, provide a final message
-            provideFinalResponse();
-        }
-    }
-
-    function provideFinalResponse() {
-        // --- AI BOT'S RESPONSE LOGIC ---
-        // This is where you would process the collected 'userResponses'
-        // and have the AI generate a more detailed explanation.
-        // For now, it's a simple acknowledgment.
-        let summary = `Thank you for providing the information. Based on your goal to "${userResponses[0]}" and the details you provided, here is what I found...`;
-        displayMessage(summary, 'bot');
-        displayMessage("This is where the AI's full explanation would go.", 'bot');
-    }
-
-    function handleUserInput() {
-        const text = userInput.value.trim();
-        if (text) {
-            displayMessage(text, 'user');
-
-            // Store the user's answer
-            userResponses[currentQuestionIndex] = text;
-            currentQuestionIndex++;
-            
-            userInput.value = '';
-
-            // Ask the next question after a short delay
-            setTimeout(askNextQuestion, 500);
-        }
-    }
-
+    // Add event listeners for sending messages
     sendBtn.addEventListener('click', handleUserInput);
-    userInput.addEventListener('keypress', (event) => {
+    userInputElement.addEventListener('keypress', (event) => {
         if (event.key === 'Enter') {
             handleUserInput();
         }
     });
 
+    // Add event listener for logout
     logoutBtn.addEventListener('click', () => {
         sessionStorage.removeItem('isLoggedIn');
         window.location.href = 'index.html';
     });
+
+    // Display a welcome message when the chat page loads
+    displayMessage("Hello! I'm your AI assistant. How can I help you today?", 'bot');
+}
+
+
+// --- Core function to send a message to the backend ---
+async function handleUserInput() {
+    // === CONFIGURATION: This is your backend URL ===
+    const backendUrl = 'https://vigilant-pancake-g4q5wp744xwghwg57-5000.app.github.dev/';
+    // ===============================================
+
+    const userInputElement = document.getElementById('user-input');
+    const text = userInputElement.value.trim();
+
+    if (text) {
+        displayMessage(text, 'user');
+        userInputElement.value = ''; // Clear the input field immediately
+
+        // Show a "thinking..." indicator for better user experience
+        const typingIndicator = displayMessage("AI is thinking...", 'bot', true);
+
+        try {
+            // Make the network call to your backend server
+            const response = await fetch(`${backendUrl}/chat`, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify({ message: text })
+            });
+
+            // Remove the "thinking..." indicator once we get a response
+            typingIndicator.remove();
+
+            if (!response.ok) {
+                // Handle server-side errors (like 500)
+                const errorData = await response.json();
+                throw new Error(errorData.error || `Server error: ${response.status}`);
+            }
+
+            const data = await response.json();
+            
+            // Display the bot's actual response
+            if (data.response) {
+                displayMessage(data.response, 'bot');
+            } else {
+                throw new Error("Received an empty response from the server.");
+            }
+
+        } catch (error) {
+            // Handle network errors (like server being down or unreachable)
+            console.error("Error connecting to the backend:", error);
+            if (typingIndicator) typingIndicator.remove(); // Make sure indicator is removed on error
+            displayMessage(`Sorry, there was a problem connecting to the AI. Please try again later.`, 'bot');
+        }
+    }
+}
+
+
+// --- Utility function to add messages to the chat window ---
+// This version includes a flag for the "typing" indicator styling
+function displayMessage(text, sender, isTyping = false) {
+    const chatWindow = document.getElementById('chat-window');
+    const messageElement = document.createElement('div');
+    messageElement.classList.add('message', sender);
     
-    // Start the conversation
-    askNextQuestion();
+    // Add a special class for the typing indicator for potential styling
+    if (isTyping) {
+        messageElement.classList.add('typing');
+    }
+    
+    messageElement.textContent = text;
+    chatWindow.appendChild(messageElement);
+    // Scroll to the latest message
+    chatWindow.scrollTop = chatWindow.scrollHeight;
+    
+    return messageElement; // Return the element so we can remove it later
 }
