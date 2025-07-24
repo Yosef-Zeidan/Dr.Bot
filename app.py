@@ -30,6 +30,10 @@ generative_model = genai.GenerativeModel('gemini-1.5-flash')
 # --- 3. Flask App Setup ---
 app = Flask(__name__)
 CORS(app)
+# --- NEW: Add a simple root endpoint to confirm the server is running ---
+@app.route('/')
+def index():
+    return "<h1>AI Backend Server</h1><p>The server is running. Please use the front-end application to chat.</p>"
 
 @app.route('/chat', methods=['POST'])
 def chat():
